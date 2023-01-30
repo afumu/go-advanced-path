@@ -6,6 +6,30 @@ import (
 	"time"
 )
 
+func TestDemo(t *testing.T) {
+
+	// 创建一个channel
+	var ch = make(chan int)
+
+	// 开启一个A协程执行任务
+	go func() {
+		// 模拟执行任务
+		time.Sleep(3 * time.Second)
+		ch <- 1
+	}()
+
+	// 开启一个B协程等待任务结果
+	go func() {
+		// 这里没有获取到结果的时候，会阻塞等待
+		fmt.Println("task result:", <-ch)
+		fmt.Println("task done")
+	}()
+
+	// 避免主协程关闭
+	time.Sleep(5 * time.Second)
+
+}
+
 func TestDemo1(t *testing.T) {
 	/*
 
@@ -129,6 +153,47 @@ func TestDemo9(t *testing.T) {
 	fmt.Println("main done")
 }
 
+// 只写 channel
 func TestDemo10(t *testing.T) {
+	// 单向 channel，只写channel
+	//ch := make(chan<- int)
+	//// ch 是一个只写通道，无法从ch中读取数据
+	//fmt.Println(<-ch)
+}
 
+// 只读 channel
+func TestDemo11(t *testing.T) {
+	// 单向 channel，只读channel
+	//ch := make(<-chan int)
+	//ch <- 1
+}
+
+func TestDemo12(t *testing.T) {
+	//ch := make(chan<- int)
+	//go testChan(ch)
+	// 编译不通过，由于ch是只读通道，这里不允许读取
+	//fmt.Println(<-ch)
+
+	//ch := make(<-chan int)
+	// 编译不通过，testChan方法中需要的是一个写chanel
+	//go testChan(ch)
+
+	// chan 包含可读可写通道
+	ch := make(chan int)
+	go testChan(ch)
+
+	// 这里编译通过
+	fmt.Println(<-ch)
+}
+
+func testChan(ch chan<- int) {
+	ch <- 1
+}
+
+func TestDemo13(t *testing.T) {
+	// 没有设置长度的channel就是无缓冲channel
+	ch := make(chan int)
+
+	// 这里会一直阻塞，因为没有任何协程来读取
+	ch <- 1
 }
