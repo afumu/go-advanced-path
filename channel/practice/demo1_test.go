@@ -217,3 +217,110 @@ func execute7(n int) chan struct{} {
 
 	return quit
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 并发退出
+// 协程退出模式的应用-并发退出
+// 这里使用到了把一个函数赋值给接口的应用，通过把一个函数赋值给一个接口
+type GracefullyShutdowner interface {
+	Shutdown() error
+}
+
+type ShutdownerFunc func() error
+
+func (f ShutdownerFunc) Shutdown() error {
+	return f()
+}
+
+func shutdownMaker(processTm int) func() error {
+	return func() error {
+		time.Sleep(time.Second * time.Duration(processTm))
+		fmt.Println("执行：", processTm)
+		return nil
+	}
+}
+
+func ConcurrentShutdown(waitTimeout time.Duration, shutdowners ...GracefullyShutdowner) error {
+	c := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for _, g := range shutdowners {
+			wg.Add(1)
+			go func(shutdowner GracefullyShutdowner) {
+				defer wg.Done()
+				shutdowner.Shutdown()
+			}(g)
+		}
+		wg.Wait()
+		c <- struct{}{}
+	}()
+
+	timer := time.NewTimer(waitTimeout)
+	defer timer.Stop()
+	select {
+	case <-c:
+		return nil
+	case <-timer.C:
+		return errors.New("wait timeout")
+	}
+}
+
+func TestConcurrentShutdown(t *testing.T) {
+	f1 := shutdownMaker(2)
+	f2 := shutdownMaker(6)
+
+	// 设置10秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里不会超时，正常退出
+	err := ConcurrentShutdown(10*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+
+	fmt.Println(err)
+
+	// 设置4秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里会超时退出
+	err = ConcurrentShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+	fmt.Println(err)
+}
+
+// 所有的任务执行时间总和不得超过waitTimeout时间
+func SequentialShutdown(waitTimeout time.Duration, shutdowners ...GracefullyShutdowner) error {
+	start := time.Now()
+	var left time.Duration
+	// 设置等待时间
+	timer := time.NewTimer(waitTimeout)
+	// 遍历所有的退出器
+	for i, g := range shutdowners {
+		// 计算前面任务消耗了多少时间，需要超时时间减掉这个时间
+		elapsed := time.Since(start)
+		left = waitTimeout - elapsed
+		c := make(chan struct{})
+		go func(i int, shutdowner GracefullyShutdowner) {
+			shutdowner.Shutdown()
+			fmt.Println(i, " 执行成功")
+			c <- struct{}{}
+		}(i, g)
+		// 重置timer
+		timer.Reset(left)
+
+		select {
+		case <-c:
+			// 继续执行
+		case <-timer.C:
+			return errors.New("wait timeout")
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 串行退出
+func TestSequentialShutdown(t *testing.T) {
+	f1 := shutdownMaker(6)
+	f2 := shutdownMaker(4)
+
+	// 设置11秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此不会超时
+	err := SequentialShutdown(11*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+
+	fmt.Println(err)
+	fmt.Println("------------------------------------------------")
+	// 设置4秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此会超时
+	err = SequentialShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+	fmt.Println(err)
+}
