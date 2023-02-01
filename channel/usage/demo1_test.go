@@ -2,9 +2,31 @@ package usage
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
+
+var m = make(map[int]int)
+var lock sync.Mutex
+
+func Test1(t *testing.T) {
+	for i := 0; i < 500; i++ {
+		go sum(i)
+	}
+
+	time.Sleep(3 * time.Second)
+}
+
+func sum(count int) {
+	var result int
+	for i := 0; i < count; i++ {
+		result += i
+	}
+	lock.Lock()
+	m[count] = result
+	lock.Unlock()
+}
 
 func TestDemo(t *testing.T) {
 
@@ -18,16 +40,9 @@ func TestDemo(t *testing.T) {
 		ch <- 1
 	}()
 
-	// 开启一个B协程等待任务结果
-	go func() {
-		// 这里没有获取到结果的时候，会阻塞等待
-		fmt.Println("task result:", <-ch)
-		fmt.Println("task done")
-	}()
-
-	// 避免主协程关闭
-	time.Sleep(5 * time.Second)
-
+	// 没有完成任务之前，这里会一直阻塞
+	result := <-ch
+	fmt.Println("result:", result)
 }
 
 func TestDemo1(t *testing.T) {
@@ -196,4 +211,70 @@ func TestDemo13(t *testing.T) {
 
 	// 这里会一直阻塞，因为没有任何协程来读取
 	ch <- 1
+}
+
+func TestDemo14(t *testing.T) {
+	ch := make(chan int, 10)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	for v := range ch {
+		fmt.Println(v)
+	}
+
+	// 发现出现了错误
+	// fatal error: all goroutines are asleep - deadlock!
+}
+
+// 遍历关闭的chanel
+func TestDemo15(t *testing.T) {
+	ch := make(chan int, 10)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	for v := range ch {
+		fmt.Println(v)
+	}
+}
+
+func TestDemo16(t *testing.T) {
+	ch := make(chan int, 10)
+
+	// 通过 每 2 秒 写入一条数据
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		for {
+			select {
+			case <-ticker.C:
+				ch <- 1
+			}
+		}
+	}()
+
+	// 这里不会发生崩溃，会一直阻塞读取数据
+	for v := range ch {
+		fmt.Println(v)
+	}
+}
+
+func TestDemo17(t *testing.T) {
+
+	// 创建一个无缓存通道
+	ch := make(chan int)
+	go func() {
+		time.Sleep(3 * time.Second)
+		ch <- 3
+	}()
+
+	// 这里会一直阻塞
+	//result := <-ch
+	//fmt.Println("result:", result)
+
+	select {
+	case result := <-ch:
+		fmt.Println("result:", result)
+	default:
+		fmt.Println("done")
+	}
 }
