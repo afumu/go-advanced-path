@@ -8,6 +8,42 @@ import (
 	"time"
 )
 
+// 结合select避免阻塞
+func TestSelectBlock(t *testing.T) {
+	var ch = make(chan int)
+	select {
+	case n := <-ch:
+		fmt.Println(n)
+	default:
+		fmt.Println("default...")
+	}
+	fmt.Println("done")
+}
+
+// 结合select 超时
+func TestSelectTimeout(t *testing.T) {
+	var ch = make(chan int)
+	timer := time.NewTimer(3 * time.Second)
+	select {
+	case n := <-ch:
+		fmt.Println(n)
+	case <-timer.C:
+		fmt.Println("timeout")
+	}
+	fmt.Println("done")
+}
+
+// 结合select 心跳
+func TestSelectTick(t *testing.T) {
+	ticker := time.NewTicker(3 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			fmt.Println("t")
+		}
+	}
+}
+
 // 无缓冲通道一对一通信
 func TestOneToOne(t *testing.T) {
 	ch := oneToOneExecute()
@@ -527,4 +563,65 @@ func spawn(f func(int) (int, bool), in <-chan int) <-chan int {
 		close(out)
 	}()
 	return out
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 交替打印
+// 有4个goroutine，编号为1、2、3、4。每秒钟会有一个goroutine打印出自己的编号，要求写一个程序，让输出的编号总是按照1、2、3、4、1、2、3、4…的顺序打印出来。
+func TestPrint(t *testing.T) {
+	print()
+}
+func print() {
+	// 创建一个长度为4，类型为 chan int 的切片
+	chSlice := make([]chan int, 4)
+
+	// 遍历切片创建4个协程
+	for i, _ := range chSlice {
+		chSlice[i] = make(chan int)
+		go func(i int) {
+			for {
+				// 获取当前channel值并打印
+				v := <-chSlice[i]
+				fmt.Println(v + 1)
+				time.Sleep(time.Second)
+				// 把下一个值写入下一个channel，等待下一次消费
+				chSlice[(i+1)%4] <- (v + 1) % 4
+			}
+		}(i)
+	}
+	//      i:   0 1 2 3
+	// (i+1)%4:  1 2 3 0
+	//       v:  0 1 2 3
+	// (v+1)%4:  1 2 3 0
+	// 往第一个塞入0
+	chSlice[0] <- 0
+	select {}
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 合并数据
+// 使用10个子协程计算1-10000的累加和，每个协程只计算1000个数
+func TestMerge(t *testing.T) {
+	var ch = make(chan int, 10)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			var s int
+			start := (n * 1000) + 1
+			end := (n + 1) * 1000
+			for j := start; j <= end; j++ {
+				s += j
+			}
+			ch <- s
+			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+	close(ch)
+	var result int
+	for v := range ch {
+		result += v
+	}
+	fmt.Println(result)
 }
