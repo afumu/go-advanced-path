@@ -8,6 +8,129 @@ import (
 	"time"
 )
 
+// 无缓冲通道一对一通信
+func TestOneToOne(t *testing.T) {
+	ch := oneToOneExecute()
+	<-ch
+	fmt.Println("done")
+}
+
+func oneToOneExecute() chan struct{} {
+	var ch = make(chan struct{})
+	go func() {
+		// 模拟执行任务
+		time.Sleep(3 * time.Second)
+		ch <- struct{}{}
+	}()
+	return ch
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 无缓冲通道一对多通信
+func TestOneToMany1(t *testing.T) {
+	ch := oneToManyExecute()
+	<-ch
+	fmt.Println("done")
+}
+
+func oneToManyExecute() chan struct{} {
+	var wg sync.WaitGroup
+	var ch = make(chan struct{})
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(j int) {
+			time.Sleep(1 * time.Second)
+			fmt.Println("sun func", j)
+			wg.Done()
+		}(i)
+	}
+	go func() {
+		wg.Wait()
+		ch <- struct{}{}
+	}()
+	return ch
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 广播机制,通过关闭channel来实现通知所有的等待协程
+func TestOneToWaitMany(t *testing.T) {
+	var ch = make(chan int)
+	for i := 0; i < 10; i++ {
+		go func(j int) {
+			for {
+				select {
+				default:
+					fmt.Println(j, ":睡眠1s")
+					time.Sleep(1 * time.Second)
+				case <-ch:
+					fmt.Println(j, ":quit")
+					return
+				}
+			}
+		}(i)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// 关闭管道，通知所有的协程退出
+	close(ch)
+	fmt.Println("over")
+	time.Sleep(3 * time.Second)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 通过锁的方式来实现数字的累加
+var counter Counter
+
+type Counter struct {
+	mu    sync.Mutex
+	count int
+}
+
+func add() {
+	counter.mu.Lock()
+	defer counter.mu.Unlock()
+	counter.count++
+}
+func TestCounter1(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		go func() {
+			add()
+		}()
+	}
+	time.Sleep(2 * time.Second)
+	fmt.Println(counter.count)
+}
+
+// 通过channel的方式来实现累加
+// 通过一个协程中启动一个协程来不断的循环累增加数字来实现累加
+var counterChan = CounterChan{ch: make(chan int)}
+
+type CounterChan struct {
+	ch    chan int
+	count int
+}
+
+func chanAdd() int {
+	return <-counterChan.ch
+}
+func TestCounterChan(t *testing.T) {
+	go func() {
+		for {
+			counterChan.ch <- counterChan.count
+			counterChan.count++
+		}
+	}()
+	for i := 0; i < 1000; i++ {
+		go func() {
+			chanAdd()
+		}()
+	}
+	time.Sleep(2 * time.Second)
+	fmt.Println(counterChan.count)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // 协程间通信
 func Test1(t *testing.T) {
 	// 通过channel把主协程和子协程进行通信
@@ -222,6 +345,21 @@ func execute7(n int) chan struct{} {
 // 并发退出
 // 协程退出模式的应用-并发退出
 // 这里使用到了把一个函数赋值给接口的应用，通过把一个函数赋值给一个接口
+
+func TestConcurrentShutdown(t *testing.T) {
+	f1 := shutdownMaker(2)
+	f2 := shutdownMaker(6)
+
+	// 设置10秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里不会超时，正常退出
+	err := ConcurrentShutdown(10*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+
+	fmt.Println(err)
+
+	// 设置4秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里会超时退出
+	err = ConcurrentShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+	fmt.Println(err)
+}
+
 type GracefullyShutdowner interface {
 	Shutdown() error
 }
@@ -265,17 +403,19 @@ func ConcurrentShutdown(waitTimeout time.Duration, shutdowners ...GracefullyShut
 	}
 }
 
-func TestConcurrentShutdown(t *testing.T) {
-	f1 := shutdownMaker(2)
-	f2 := shutdownMaker(6)
+// ---------------------------------------------------------------------------------------------------------------------
+// 串行退出
+func TestSequentialShutdown(t *testing.T) {
+	f1 := shutdownMaker(6)
+	f2 := shutdownMaker(4)
 
-	// 设置10秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里不会超时，正常退出
-	err := ConcurrentShutdown(10*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+	// 设置11秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此不会超时
+	err := SequentialShutdown(11*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
 
 	fmt.Println(err)
-
-	// 设置4秒才会超时 ，f1，f2 一共最大才执行6秒，所以这里会超时退出
-	err = ConcurrentShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+	fmt.Println("------------------------------------------------")
+	// 设置4秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此会超时
+	err = SequentialShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
 	fmt.Println(err)
 }
 
@@ -310,17 +450,54 @@ func SequentialShutdown(waitTimeout time.Duration, shutdowners ...GracefullyShut
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// 串行退出
-func TestSequentialShutdown(t *testing.T) {
-	f1 := shutdownMaker(6)
-	f2 := shutdownMaker(4)
+// channel的类似linux的管道使用方式
 
-	// 设置11秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此不会超时
-	err := SequentialShutdown(11*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
+func TestChannel(t *testing.T) {
+	// 生成管道数据
+	in := newNumGenerator(2, 20)
 
-	fmt.Println(err)
-	fmt.Println("------------------------------------------------")
-	// 设置4秒才会超时，f1，f2 是串行执行的，消耗的总时间为10秒，因此会超时
-	err = SequentialShutdown(4*time.Second, ShutdownerFunc(f1), ShutdownerFunc(f2))
-	fmt.Println(err)
+	// 先获取偶数，再平方
+	out := spawn(square, spawn(filterOdd, in))
+
+	for v := range out {
+		println(v)
+	}
+}
+
+func newNumGenerator(start, count int) <-chan int {
+	c := make(chan int)
+	go func() {
+		for i := start; i < count+1; i++ {
+			c <- i
+		}
+		close(c)
+	}()
+	return c
+}
+
+// 获取偶数
+func filterOdd(in int) (int, bool) {
+	if in%2 != 0 {
+		return 0, false
+	}
+	return in, true
+}
+
+// 把数据进行平方
+func square(in int) (int, bool) {
+	return in * in, true
+}
+
+func spawn(f func(int) (int, bool), in <-chan int) <-chan int {
+	out := make(chan int)
+	go func() {
+		for v := range in {
+			r, ok := f(v)
+			if ok {
+				out <- r
+			}
+		}
+		close(out)
+	}()
+	return out
 }
